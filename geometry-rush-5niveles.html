@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Torneo Gamer - Geometry Rush</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: #0a0a12;
+    font-family: 'Courier New', monospace;
+    overflow: hidden;
+    touch-action: none;
+    user-select: none;
+  }
+  #gameContainer {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  #hud {
+    position: absolute;
+    top: 0; left: 0; width: 100%;
+    padding: 14px 18px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    color: #fff;
+    font-size: 16px;
+    text-shadow: 0 0 6px rgba(0,0,0,0.8);
+    pointer-events: none;
+    z-index: 10;
+  }
+  #levelBadge {
+    padding: 4px 14px;
+    border-radius: 20px;
+    font-weight: bold;
+    font-size: 14px;
+    letter-spacing: 1px;
+    transition: background 0.3s, color 0.3s;
+  }
+  #timeBar {
+    position: absolute;
+    top: 0; left: 0;
+    height: 5px;
+    background: linear-gradient(90deg, #00ffcc, #ff2e6c);
+    width: 0%;
+    z-index: 11;
+  }
+  #overlay {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(5,5,15,0.92);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    text-align: center;
+    z-index: 20;
+    gap: 16px;
+    padding: 20px;
+  }
+  #overlay.hidden { display: none; }
+  #overlay h1 {
+    font-size: clamp(24px, 6vw, 42px);
+    letter-spacing: 2px;
+  }
+  #overlay p { font-size: 14px; color: #aaa; max-width: 420px; line-height: 1.5; }
+  #overlay button {
+    margin-top: 10px;
+    padding: 14px 36px;
+    font-size: 16px;
+    font-weight: bold;
+    background: linear-gradient(135deg, #00ffcc, #00b8ff);
+    border: none;
+    border-radius: 8px;
+    color: #001018;
+    cursor: pointer;
+    letter-spacing: 1px;
+    box-shadow: 0 0 20px rgba(0,255,204,0.4);
+  }
+  #overlay button:active { transform: scale(0.96); }
+  .statRow { display:flex; gap: 30px; font-size: 15px; margin-top: 4px; }
+  .statRow span b { color:#00ffcc; }
+  #tapHint {
+    position: absolute;
+    bottom: 30px; left: 0; width: 100%;
+    text-align: center;
+    color: rgba(255,255,255,0.4);
+    font-size: 12px;
+    z-index: 10;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div id="gameContainer">
+  <div id="timeBar"></div>
+  <canvas id="gameCanvas"></canvas>
+  <div id="hud">
+    <div id="levelBadge">NIVEL 1 · FÁCIL</div>
+    <div id="timeDisplay">00:00 / 05:00</div>
+    <div id="scoreDisplay">Distancia: 0m</div>
+  </div>
+  <div id="tapHint">TOCA O PULSA ESPACIO · TOCA 2 VECES PARA DOBLE SALTO</div>
+
+  <div id="overlay">
+    <h1>🎮 TORNEO GAMER</h1>
+    <h2 style="color:#00ffcc; letter-spacing:3px;">GEOMETRY RUSH</h2>
+    <p>Esquiva púas, huecos y bloques flotantes. Usa el doble salto para pasar obstáculos altos. 5 niveles: Fácil → Medio → Difícil → Infierno → Nivel Dios. ¡Muy pocos llegan al final!</p>
+    <button id="startBtn">EMPEZAR</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  const overlay = document.getElementById('overlay');
+  const startBtn = document.getElementById('startBtn');
+  const levelBadge = document.getElementById('levelBadge');
+  const timeDisplay = document.getElementById('timeDisplay');
+  const scoreDisplay = document.getElementById('scoreDisplay');
+  const timeBar = document.getElementById('timeBar');
+  const tapHint = document.getElementById('tapHint');
+
+  let W, H, GROUND_Y;
+  function resize(){
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+    GROUND_Y = H * 0.78;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  const TOTAL_TIME = 300; // 5 minutos
+  const LEVELS = [
+    { name:'NIVEL 1 · FÁCIL',    until:60,  speed:200, spawnEvery:2.0,  color:'#00ffcc', bg:'#0a0a12' },
+    { name:'NIVEL 2 · MEDIO',    until:120, speed:320, spawnEvery:1.4,  color:'#ffcc00', bg:'#12100a' },
+    { name:'NIVEL 3 · DIFÍCIL',  until:180, speed:420, spawnEvery:1.0,  color:'#ff8c00', bg:'#160a05' },
+    { name:'NIVEL 4 · INFIERNO', until:240, speed:520, spawnEvery:0.75, color:'#ff2e6c', bg:'#1a0508' },
+    { name:'NIVEL 5 · DIOS',     until:300, speed:680, spawnEvery:0.55, color:'#b026ff', bg:'#0d0518' },
+  ];
+
+  let state = 'menu'; // menu | playing | gameover | victory
+  let elapsed = 0;
+  let lastTime = 0;
+  let spawnTimer = 0;
+  let distance = 0;
+  let obstacles = [];
+  let particles = [];
+  let currentLevelIdx = 0;
+
+  const player = {
+    x: 0, y: 0, size: 42,
+    vy: 0, rotation: 0,
+    grounded: true,
+    gravity: 2400,
+    jumpForce: -820,
+    doubleJumpForce: -700,
+    jumpsUsed: 0,
+    maxJumps: 2,
+  };
+
+  function resetGame(){
+    elapsed = 0;
+    spawnTimer = 0;
+    distance = 0;
+    obstacles = [];
+    particles = [];
+    currentLevelIdx = 0;
+    player.x = W * 0.18;
+    player.y = GROUND_Y - player.size;
+    player.vy = 0;
+    player.rotation = 0;
+    player.grounded = true;
+    player.jumpsUsed = 0;
+  }
+
+  function getLevel(t){
+    for (let i=0;i<LEVELS.length;i++){
+      if (t < LEVELS[i].until) return {lvl: LEVELS[i], idx:i};
+    }
+    return {lvl: LEVELS[LEVELS.length-1], idx: LEVELS.length-1};
+  }
+
+  function jump(){
+    if (state !== 'playing') return;
+    if (player.jumpsUsed < player.maxJumps){
+      player.vy = player.jumpsUsed === 0 ? player.jumpForce : player.doubleJumpForce;
+      player.grounded = false;
+      player.jumpsUsed++;
+      spawnJumpParticles(player.x+player.size/2, player.y+player.size);
+    }
+  }
+
+  function spawnJumpParticles(x,y){
+    for (let i=0;i<6;i++){
+      particles.push({
+        x, y,
+        vx: (Math.random()-0.5)*120,
+        vy: 40+Math.random()*60,
+        life: 0.25+Math.random()*0.15,
+        color: '#ffffff'
+      });
+    }
+  }
+
+  window.addEventListener('keydown', (e)=>{
+    if (e.code === 'Space'){ e.preventDefault(); jump(); }
+  });
+  canvas.addEventListener('pointerdown', (e)=>{ e.preventDefault(); jump(); });
+  document.getElementById('gameContainer').addEventListener('pointerdown', jump);
+
+  startBtn.addEventListener('click', ()=>{
+    resetGame();
+    state = 'playing';
+    overlay.classList.add('hidden');
+    tapHint.style.opacity = '1';
+    lastTime = performance.now();
+    requestAnimationFrame(loop);
+  });
+
+  function spawnObstacle(levelIdx){
+    const groundSize = 34 + Math.random()*22;
+    const roll = Math.random();
+
+    // NIVEL 5 · DIOS: el más brutal, combina todo con mínimo margen
+    if (levelIdx === 4){
+      if (roll < 0.30){
+        const gap = 90;
+        for (let i=0;i<4;i++) obstacles.push({ x: W + i*gap, y: GROUND_Y, size: groundSize, type:'spike' });
+        return;
+      }
+      if (roll < 0.48){
+        spawnGap(280 + Math.random()*80);
+        return;
+      }
+      if (roll < 0.65){
+        obstacles.push({ x: W, y: GROUND_Y - 175, size: 52, type:'floating' });
+        return;
+      }
+      if (roll < 0.85){
+        // combo doble: hueco + flotante + otra ráfaga, casi sin respiro
+        spawnGap(170);
+        obstacles.push({ x: W + 240, y: GROUND_Y - 160, size: 48, type:'floating' });
+        obstacles.push({ x: W + 420, y: GROUND_Y, size: groundSize, type:'spike' });
+        return;
+      }
+      if (roll < 0.93){
+        spawnPlatformWithSpike();
+        return;
+      }
+      obstacles.push({ x: W, y: GROUND_Y, size: groundSize, type:'spike' });
+      return;
+    }
+
+    // NIVEL 4 · INFIERNO: variedad completa, ráfagas y combinaciones agresivas
+    if (levelIdx === 3){
+      if (roll < 0.32){
+        const gap = 105;
+        for (let i=0;i<3;i++) obstacles.push({ x: W + i*gap, y: GROUND_Y, size: groundSize, type:'spike' });
+        return;
+      }
+      if (roll < 0.55){
+        spawnGap(250 + Math.random()*70);
+        return;
+      }
+      if (roll < 0.75){
+        obstacles.push({ x: W, y: GROUND_Y - 165, size: 50, type:'floating' });
+        return;
+      }
+      if (roll < 0.85){
+        spawnGap(180);
+        obstacles.push({ x: W + 260, y: GROUND_Y - 150, size: 46, type:'floating' });
+        return;
+      }
+      if (roll < 0.92){
+        spawnPlatformWithSpike();
+        return;
+      }
+      obstacles.push({ x: W, y: GROUND_Y, size: groundSize, type:'spike' });
+      return;
+    }
+
+    // NIVEL 3 · DIFÍCIL: introduce ráfagas dobles y más bloques flotantes
+    if (levelIdx === 2){
+      if (roll < 0.22){
+        const gap = 120;
+        for (let i=0;i<3;i++) obstacles.push({ x: W + i*gap, y: GROUND_Y, size: groundSize, type:'spike' });
+        return;
+      }
+      if (roll < 0.40){
+        spawnGap(200 + Math.random()*50);
+        return;
+      }
+      if (roll < 0.55){
+        obstacles.push({ x: W, y: GROUND_Y - 145, size: 46, type:'floating' });
+        return;
+      }
+      if (roll < 0.75){
+        obstacles.push({ x: W, y: GROUND_Y, size: groundSize, type:'spike' });
+        obstacles.push({ x: W + 90, y: GROUND_Y, size: groundSize, type:'spike' });
+        return;
+      }
+      if (roll < 0.85){
+        spawnPlatformWithSpike();
+        return;
+      }
+      obstacles.push({ x: W, y: GROUND_Y, size: groundSize, type:'spike' });
+      return;
+    }
+
+    // NIVEL 2 · MEDIO: introduce huecos y bloques flotantes ocasionales
+    if (levelIdx === 1){
+      if (roll < 0.20){
+        spawnGap(180);
+        return;
+      }
+      if (roll < 0.35){
+        obstacles.push({ x: W, y: GROUND_Y - 140, size: 44, type:'floating' });
+        return;
+      }
+      if (roll < 0.55){
+        obstacles.push({ x: W, y: GROUND_Y, size: groundSize, type:'spike' });
+        obstacles.push({ x: W + 90, y: GROUND_Y, size: groundSize, type:'spike' });
+        return;
+      }
+      obstacles.push({ x: W, y: GROUND_Y, size: groundSize, type:'spike' });
+      return;
+    }
+
+    // NIVEL 1 · FÁCIL: solo púas simples en el piso, para aprender los controles
+    obstacles.push({ x: W, y: GROUND_Y, size: groundSize, type:'spike' });
+  }
+
+  function spawnGap(width){
+    obstacles.push({ x: W, y: GROUND_Y, size: width, type:'gap' });
+  }
+
+  function spawnPlatformWithSpike(){
+    const platY = GROUND_Y - 110;
+    obstacles.push({ x: W, y: platY, size: 130, height: 16, type:'platform' });
+    obstacles.push({ x: W + 40, y: platY, size: 30, type:'platform_spike' });
+  }
+
+  function rectFromSpike(o){
+    return { x: o.x, y: o.y - o.size, w: o.size, h: o.size };
+  }
+
+  function checkCollision(){
+    const pSize = player.size * 0.72; // hitbox algo más generosa que el sprite
+    const px = player.x + (player.size - pSize)/2;
+    const py = player.y + (player.size - pSize)/2;
+
+    // caída por un hueco = choque (game over)
+    for (const o of obstacles){
+      if (o.type === 'gap'){
+        const overIt = player.x + player.size*0.3 > o.x && player.x + player.size*0.7 < o.x + o.size;
+        if (overIt && player.y + player.size >= GROUND_Y + 4) return true;
+      }
+    }
+
+    for (const o of obstacles){
+      if (o.type === 'spike' || o.type === 'floating'){
+        const r = rectFromSpike(o);
+        if (px < r.x + r.w*0.85 && px + pSize > r.x + r.w*0.15 &&
+            py < r.y + r.h && py + pSize > r.y + r.h*0.15){
+          return true;
+        }
+      }
+      if (o.type === 'platform_spike'){
+        const r = { x: o.x, y: o.y - o.size, w: o.size, h: o.size };
+        if (px < r.x + r.w*0.85 && px + pSize > r.x + r.w*0.15 &&
+            py < r.y + r.h && py + pSize > r.y + r.h*0.15){
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  function spawnCrashParticles(x,y,color){
+    for (let i=0;i<26;i++){
+      const angle = Math.random()*Math.PI*2;
+      const speed = 100 + Math.random()*300;
+      particles.push({
+        x, y,
+        vx: Math.cos(angle)*speed,
+        vy: Math.sin(angle)*speed,
+        life: 0.6 + Math.random()*0.4,
+        color
+      });
+    }
+  }
+
+  function endGame(win){
+    state = win ? 'victory' : 'gameover';
+    tapHint.style.opacity = '0';
+    const mins = Math.floor(elapsed/60);
+    const secs = Math.floor(elapsed%60);
+    const timeStr = String(mins).padStart(2,'0')+':'+String(secs).padStart(2,'0');
+    overlay.innerHTML = `
+      <h1>${win ? '🏆 ¡VICTORIA!' : '💥 GAME OVER'}</h1>
+      <p>${win ? 'Llegaste a la meta de 5 minutos. ¡Eres de los pocos que sobrevive al Infierno!' : 'Chocaste contra un obstáculo. ¡Intenta llegar más lejos!'}</p>
+      <div class="statRow">
+        <span>Tiempo: <b>${timeStr}</b></span>
+        <span>Distancia: <b>${Math.floor(distance)}m</b></span>
+      </div>
+      <button id="retryBtn">JUGAR DE NUEVO</button>
+    `;
+    overlay.classList.remove('hidden');
+    document.getElementById('retryBtn').addEventListener('click', ()=>{
+      resetGame();
+      state = 'playing';
+      overlay.classList.add('hidden');
+      tapHint.style.opacity = '1';
+      lastTime = performance.now();
+      requestAnimationFrame(loop);
+    });
+  }
+
+  function update(dt){
+    elapsed += dt;
+    if (elapsed >= TOTAL_TIME){
+      elapsed = TOTAL_TIME;
+      endGame(true);
+      return;
+    }
+
+    const { lvl, idx } = getLevel(elapsed);
+    currentLevelIdx = idx;
+
+    // física del jugador
+    player.vy += player.gravity * dt;
+    player.y += player.vy * dt;
+
+    // revisa si cae dentro de un hueco (gap) del piso
+    const overGap = obstacles.some(o => o.type === 'gap' &&
+      player.x + player.size*0.3 > o.x && player.x + player.size*0.7 < o.x + o.size);
+
+    // revisa si está aterrizando sobre una plataforma
+    let landedOnPlatform = false;
+    for (const o of obstacles){
+      if (o.type !== 'platform') continue;
+      const withinX = player.x + player.size*0.5 > o.x && player.x + player.size*0.5 < o.x + o.size;
+      const fallingOntoTop = player.vy > 0 && (player.y + player.size) >= o.y && (player.y + player.size) <= o.y + 24;
+      if (withinX && fallingOntoTop){
+        player.y = o.y - player.size;
+        player.vy = 0;
+        player.grounded = true;
+        player.jumpsUsed = 0;
+        landedOnPlatform = true;
+        break;
+      }
+    }
+
+    if (!landedOnPlatform){
+      if (player.y + player.size >= GROUND_Y && !overGap){
+        player.y = GROUND_Y - player.size;
+        player.vy = 0;
+        player.grounded = true;
+        player.jumpsUsed = 0;
+      } else if (player.y + player.size >= GROUND_Y && overGap){
+        // se cayó por el hueco
+        player.grounded = false;
+      } else {
+        player.grounded = false;
+      }
+    }
+
+    if (player.grounded){
+      player.rotation = Math.round(player.rotation/90)*90;
+    } else {
+      player.rotation += dt * 480;
+    }
+
+    // spawn obstáculos
+    spawnTimer += dt;
+    if (spawnTimer >= lvl.spawnEvery){
+      spawnTimer = 0;
+      spawnObstacle(idx);
+    }
+
+    // mover obstáculos
+    for (const o of obstacles){ o.x -= lvl.speed * dt; }
+    obstacles = obstacles.filter(o => o.x > -o.size - 20);
+
+    distance += lvl.speed * dt * 0.05;
+
+    // partículas
+    for (const p of particles){
+      p.x += p.vx*dt; p.y += p.vy*dt;
+      p.vy += 900*dt;
+      p.life -= dt;
+    }
+    particles = particles.filter(p => p.life > 0);
+
+    if (checkCollision()){
+      spawnCrashParticles(player.x+player.size/2, player.y+player.size/2, lvl.color);
+      endGame(false);
+      return;
+    }
+
+    // HUD
+    levelBadge.textContent = lvl.name;
+    levelBadge.style.background = lvl.color;
+    levelBadge.style.color = '#001018';
+    const mins = Math.floor(elapsed/60);
+    const secs = Math.floor(elapsed%60);
+    timeDisplay.textContent = `${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')} / 05:00`;
+    scoreDisplay.textContent = `Distancia: ${Math.floor(distance)}m`;
+    timeBar.style.width = (elapsed/TOTAL_TIME*100)+'%';
+  }
+
+  function drawBackground(lvl){
+    ctx.fillStyle = lvl.bg;
+    ctx.fillRect(0,0,W,H);
+
+    // grid decorativo sutil
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    ctx.lineWidth = 1;
+    const gridOffset = (elapsed * lvl.speed) % 60;
+    for (let x = -gridOffset; x < W; x += 60){
+      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke();
+    }
+
+    // suelo
+    ctx.fillStyle = lvl.color;
+    ctx.globalAlpha = 0.9;
+    ctx.fillRect(0, GROUND_Y, W, 4);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, GROUND_Y+4, W, H-GROUND_Y-4);
+  }
+
+  function drawPlayer(lvl){
+    ctx.save();
+    ctx.translate(player.x + player.size/2, player.y + player.size/2);
+    ctx.rotate(player.rotation * Math.PI/180);
+    ctx.shadowColor = lvl.color;
+    ctx.shadowBlur = 18;
+    ctx.fillStyle = lvl.color;
+    ctx.fillRect(-player.size/2, -player.size/2, player.size, player.size);
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(-player.size/2, -player.size/2, player.size, player.size);
+    ctx.restore();
+  }
+
+  function drawObstacles(lvl){
+    for (const o of obstacles){
+      if (o.type === 'gap'){
+        ctx.save();
+        ctx.fillStyle = '#000';
+        ctx.fillRect(o.x, GROUND_Y, o.size, canvasHeightBelow());
+        // bordes del hueco
+        ctx.fillStyle = '#ff2e44';
+        ctx.fillRect(o.x, GROUND_Y, 4, 10);
+        ctx.fillRect(o.x + o.size - 4, GROUND_Y, 4, 10);
+        ctx.restore();
+        continue;
+      }
+      if (o.type === 'platform'){
+        ctx.save();
+        ctx.fillStyle = '#00ffcc';
+        ctx.shadowColor = '#00ffcc';
+        ctx.shadowBlur = 8;
+        ctx.fillRect(o.x, o.y, o.size, o.height || 16);
+        ctx.restore();
+        continue;
+      }
+      // spike, floating, platform_spike: triángulo tipo púa
+      ctx.save();
+      ctx.fillStyle = '#ff2e44';
+      ctx.shadowColor = '#ff2e44';
+      ctx.shadowBlur = 10;
+      ctx.beginPath();
+      ctx.moveTo(o.x, o.y);
+      ctx.lineTo(o.x + o.size/2, o.y - o.size);
+      ctx.lineTo(o.x + o.size, o.y);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  function canvasHeightBelow(){ return H - GROUND_Y; }
+
+  function drawParticles(){
+    for (const p of particles){
+      ctx.globalAlpha = Math.max(p.life, 0);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x-3, p.y-3, 6, 6);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function draw(){
+    const { lvl } = getLevel(elapsed);
+    drawBackground(lvl);
+    drawObstacles(lvl);
+    drawPlayer(lvl);
+    drawParticles();
+  }
+
+  function loop(now){
+    if (state !== 'playing') return;
+    const dt = Math.min((now - lastTime)/1000, 0.033);
+    lastTime = now;
+    update(dt);
+    if (state === 'playing') draw();
+    if (state === 'playing') requestAnimationFrame(loop);
+    else draw();
+  }
+
+})();
+</script>
+</body>
+</html>
