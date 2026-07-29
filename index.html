@@ -114,21 +114,39 @@
     <h1>🎮 TORNEO GAMER</h1>
     <h2 style="color:#00ffcc; letter-spacing:3px;">GEOMETRY RUSH</h2>
     <p>Esquiva púas, huecos y bloques flotantes. Usa el doble salto para pasar obstáculos altos. 5 niveles: Fácil → Medio → Difícil → Infierno → Nivel Dios. ¡Muy pocos llegan al final!</p>
-    <button id="startBtn">EMPEZAR</button>
+
+    <div id="codeGate" style="display:flex; flex-direction:column; align-items:center; gap:10px; width:100%; max-width:320px;">
+      <input id="codeInput" type="text" placeholder="Código de acceso" maxlength="12"
+        style="width:100%; padding:12px; font-size:16px; text-align:center; letter-spacing:2px; text-transform:uppercase; border-radius:8px; border:2px solid #333; background:#111; color:#fff; font-family:'Courier New',monospace;">
+      <button id="validateCodeBtn" style="width:100%;">VALIDAR Y EMPEZAR</button>
+      <p id="codeError" style="display:none; color:#ff2e6c; font-size:13px; margin:0;"></p>
+      <p style="font-size:11px; color:#666; margin-top:6px;">¿No tienes código? Consigue uno pagando la entrada del torneo.</p>
+    </div>
+
+    <button id="startBtn" style="display:none;">EMPEZAR</button>
   </div>
 </div>
 
 <script>
+  // Configuración de conexión con el backend del torneo
+  const API_URL = 'https://api.nexusiapro.pro';
+
 (function(){
   const canvas = document.getElementById('gameCanvas');
   const ctx = canvas.getContext('2d');
   const overlay = document.getElementById('overlay');
   const startBtn = document.getElementById('startBtn');
+  const codeGate = document.getElementById('codeGate');
+  const codeInput = document.getElementById('codeInput');
+  const validateCodeBtn = document.getElementById('validateCodeBtn');
+  const codeError = document.getElementById('codeError');
   const levelBadge = document.getElementById('levelBadge');
   const timeDisplay = document.getElementById('timeDisplay');
   const scoreDisplay = document.getElementById('scoreDisplay');
   const timeBar = document.getElementById('timeBar');
   const tapHint = document.getElementById('tapHint');
+
+  let currentAccessCode = null; // el código validado con el que se está jugando esta partida
 
   let W, H, GROUND_Y;
   function resize(){
@@ -218,14 +236,59 @@
   canvas.addEventListener('pointerdown', (e)=>{ e.preventDefault(); jump(); });
   document.getElementById('gameContainer').addEventListener('pointerdown', jump);
 
-  startBtn.addEventListener('click', ()=>{
+  function startGamePlay(){
     resetGame();
     state = 'playing';
     overlay.classList.add('hidden');
     tapHint.style.opacity = '1';
     lastTime = performance.now();
     requestAnimationFrame(loop);
-  });
+  }
+
+  async function validateAndStart(inputEl, btnEl, errorEl){
+    inputEl = inputEl || codeInput;
+    btnEl = btnEl || validateCodeBtn;
+    errorEl = errorEl || codeError;
+    const code = inputEl.value.trim().toUpperCase();
+    errorEl.style.display = 'none';
+    if (!code){
+      errorEl.textContent = 'Escribe tu código de acceso.';
+      errorEl.style.display = 'block';
+      return;
+    }
+    btnEl.disabled = true;
+    btnEl.textContent = 'Validando...';
+    try {
+      const res = await fetch(`${API_URL}/api/canjear-codigo`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code })
+      });
+      const data = await res.json();
+      if (data.valid){
+        currentAccessCode = code;
+        startGamePlay();
+        return;
+      } else {
+        const reasons = {
+          codigo_no_existe: 'Ese código no existe. Revisa que esté bien escrito.',
+          codigo_ya_usado: 'Ese código ya fue usado.',
+        };
+        errorEl.textContent = reasons[data.reason] || 'Código inválido.';
+        errorEl.style.display = 'block';
+      }
+    } catch (err){
+      errorEl.textContent = 'No se pudo conectar con el servidor. Intenta de nuevo.';
+      errorEl.style.display = 'block';
+    }
+    btnEl.disabled = false;
+    btnEl.textContent = 'VALIDAR Y EMPEZAR';
+  }
+
+  validateCodeBtn.addEventListener('click', validateAndStart);
+  codeInput.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') validateAndStart(); });
+
+  startBtn.addEventListener('click', startGamePlay);
 
   function spawnObstacle(levelIdx){
     const groundSize = 34 + Math.random()*22;
@@ -400,6 +463,25 @@
     }
   }
 
+  async function submitResult(win){
+    if (!currentAccessCode) return { ok:false, reason:'sin_codigo' };
+    try {
+      const res = await fetch(`${API_URL}/api/resultado`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: currentAccessCode,
+          elapsedSeconds: elapsed,
+          distance: distance,
+          reachedGoal: !!win,
+        })
+      });
+      return await res.json();
+    } catch (err){
+      return { ok:false, reason:'error_conexion' };
+    }
+  }
+
   function endGame(win){
     state = win ? 'victory' : 'gameover';
     tapHint.style.opacity = '0';
@@ -413,17 +495,52 @@
         <span>Tiempo: <b>${timeStr}</b></span>
         <span>Distancia: <b>${Math.floor(distance)}m</b></span>
       </div>
-      <button id="retryBtn">JUGAR DE NUEVO</button>
+      <p id="submitStatus" style="font-size:13px; color:#888;">Guardando resultado...</p>
+      <button id="retryBtn" style="display:none;">JUGAR DE NUEVO CON OTRO CÓDIGO</button>
     `;
     overlay.classList.remove('hidden');
-    document.getElementById('retryBtn').addEventListener('click', ()=>{
-      resetGame();
-      state = 'playing';
-      overlay.classList.add('hidden');
-      tapHint.style.opacity = '1';
-      lastTime = performance.now();
-      requestAnimationFrame(loop);
+
+    submitResult(win).then((result) => {
+      const statusEl = document.getElementById('submitStatus');
+      if (!statusEl) return; // el jugador ya pasó de pantalla
+      if (result.ok){
+        statusEl.textContent = win
+          ? '✅ ¡Resultado guardado! Si ganaste, revisa tu pago en las próximas 24-48 horas.'
+          : '✅ Resultado guardado.';
+        statusEl.style.color = '#00ffcc';
+      } else {
+        statusEl.textContent = '⚠️ No se pudo guardar el resultado (' + (result.reason || 'error') + '). Si crees que esto es un error, contáctanos.';
+        statusEl.style.color = '#ff2e6c';
+      }
+      document.getElementById('retryBtn').style.display = 'inline-block';
     });
+
+    currentAccessCode = null; // el código ya se usó, no sirve para otra partida
+
+    document.getElementById('retryBtn').addEventListener('click', ()=>{
+      // Vuelve a la pantalla de inicio a pedir un código nuevo
+      overlay.innerHTML = `
+        <h1>🎮 TORNEO GAMER</h1>
+        <h2 style="color:#00ffcc; letter-spacing:3px;">GEOMETRY RUSH</h2>
+        <p>Esquiva púas, huecos y bloques flotantes. Usa el doble salto para pasar obstáculos altos. 5 niveles: Fácil → Medio → Difícil → Infierno → Nivel Dios. ¡Muy pocos llegan al final!</p>
+        <div id="codeGate" style="display:flex; flex-direction:column; align-items:center; gap:10px; width:100%; max-width:320px;">
+          <input id="codeInput" type="text" placeholder="Código de acceso" maxlength="12"
+            style="width:100%; padding:12px; font-size:16px; text-align:center; letter-spacing:2px; text-transform:uppercase; border-radius:8px; border:2px solid #333; background:#111; color:#fff; font-family:'Courier New',monospace;">
+          <button id="validateCodeBtn" style="width:100%;">VALIDAR Y EMPEZAR</button>
+          <p id="codeError" style="display:none; color:#ff2e6c; font-size:13px; margin:0;"></p>
+          <p style="font-size:11px; color:#666; margin-top:6px;">¿No tienes código? Consigue uno pagando la entrada del torneo.</p>
+        </div>
+      `;
+      rebindCodeGate();
+    });
+  }
+
+  function rebindCodeGate(){
+    const newInput = document.getElementById('codeInput');
+    const newBtn = document.getElementById('validateCodeBtn');
+    const newError = document.getElementById('codeError');
+    newBtn.addEventListener('click', () => validateAndStart(newInput, newBtn, newError));
+    newInput.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') validateAndStart(newInput, newBtn, newError); });
   }
 
   function update(dt){
