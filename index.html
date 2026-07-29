@@ -147,6 +147,7 @@
   const tapHint = document.getElementById('tapHint');
 
   let currentAccessCode = null; // el código validado con el que se está jugando esta partida
+  let attemptsRemaining = 0; // cuántos intentos quedan con el código actual
 
   let W, H, GROUND_Y;
   function resize(){
@@ -267,6 +268,7 @@
       const data = await res.json();
       if (data.valid){
         currentAccessCode = code;
+        attemptsRemaining = typeof data.attemptsRemaining === 'number' ? data.attemptsRemaining : 0;
         startGamePlay();
         return;
       } else {
@@ -488,6 +490,7 @@
     const mins = Math.floor(elapsed/60);
     const secs = Math.floor(elapsed%60);
     const timeStr = String(mins).padStart(2,'0')+':'+String(secs).padStart(2,'0');
+    const hasExtraAttempt = !win && attemptsRemaining > 0;
     overlay.innerHTML = `
       <h1>${win ? '🏆 ¡VICTORIA!' : '💥 GAME OVER'}</h1>
       <p>${win ? 'Llegaste a la meta de 5 minutos. ¡Eres de los pocos que sobrevive al Infierno!' : 'Chocaste contra un obstáculo. ¡Intenta llegar más lejos!'}</p>
@@ -496,7 +499,9 @@
         <span>Distancia: <b>${Math.floor(distance)}m</b></span>
       </div>
       <p id="submitStatus" style="font-size:13px; color:#888;">Guardando resultado...</p>
-      <button id="retryBtn" style="display:none;">JUGAR DE NUEVO CON OTRO CÓDIGO</button>
+      <button id="retryBtn" style="display:none;">
+        ${hasExtraAttempt ? 'JUGAR TU 2° INTENTO' : 'JUGAR DE NUEVO CON OTRO CÓDIGO'}
+      </button>
     `;
     overlay.classList.remove('hidden');
 
@@ -506,7 +511,7 @@
       if (result.ok){
         statusEl.textContent = win
           ? '✅ ¡Resultado guardado! Si ganaste, revisa tu pago en las próximas 24-48 horas.'
-          : '✅ Resultado guardado.';
+          : '✅ Resultado guardado.' + (hasExtraAttempt ? ' Te queda 1 intento con este mismo código.' : '');
         statusEl.style.color = '#00ffcc';
       } else {
         statusEl.textContent = '⚠️ No se pudo guardar el resultado (' + (result.reason || 'error') + '). Si crees que esto es un error, contáctanos.';
@@ -515,9 +520,28 @@
       document.getElementById('retryBtn').style.display = 'inline-block';
     });
 
-    currentAccessCode = null; // el código ya se usó, no sirve para otra partida
+    document.getElementById('retryBtn').addEventListener('click', async ()=>{
+      if (hasExtraAttempt && currentAccessCode){
+        // Reintenta automáticamente con el mismo código (2do intento)
+        const retryBtn = document.getElementById('retryBtn');
+        retryBtn.disabled = true;
+        retryBtn.textContent = 'Cargando...';
+        try {
+          const res = await fetch(`${API_URL}/api/canjear-codigo`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: currentAccessCode })
+          });
+          const data = await res.json();
+          if (data.valid){
+            attemptsRemaining = typeof data.attemptsRemaining === 'number' ? data.attemptsRemaining : 0;
+            startGamePlay();
+            return;
+          }
+        } catch(err){ /* si falla, cae al flujo de pedir código nuevo abajo */ }
+      }
 
-    document.getElementById('retryBtn').addEventListener('click', ()=>{
+      currentAccessCode = null;
       // Vuelve a la pantalla de inicio a pedir un código nuevo
       overlay.innerHTML = `
         <h1>🎮 TORNEO GAMER</h1>
