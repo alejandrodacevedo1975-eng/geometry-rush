@@ -285,7 +285,7 @@
     btnEl.textContent = 'VALIDAR Y EMPEZAR';
   }
 
-  validateCodeBtn.addEventListener('click', validateAndStart);
+  validateCodeBtn.addEventListener('click', () => validateAndStart());
   codeInput.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') validateAndStart(); });
 
   startBtn.addEventListener('click', startGamePlay);
